@@ -300,3 +300,50 @@ function mdl_avr_ode!(
 
     return
 end
+
+
+function mdl_avr_ode!(
+    device_states::AbstractArray{<:ACCEPTED_REAL_TYPES},
+    output_ode::AbstractArray{<:ACCEPTED_REAL_TYPES},
+    inner_vars::AbstractArray{<:ACCEPTED_REAL_TYPES},
+    dynamic_device::DynamicWrapper{PSY.DynamicGenerator{M, S, PSY.SEXS, TG, P}},
+) where {M <: PSY.Machine, S <: PSY.Shaft, TG <: PSY.TurbineGov, P <: PSY.PSS}
+
+    #Obtain references
+    V0_ref = get_V_ref(dynamic_device)
+
+    #Obtain indices for component w/r to device
+    local_ix = get_local_state_ix(dynamic_device, PSY.SEXS)
+
+    #Define inner states for component
+    internal_states = @view device_states[local_ix]
+    Vf = internal_states[1]
+    Vr = internal_states[2]
+
+    #Define external states for device
+    V_th = sqrt(inner_vars[VR_gen_var]^2 + inner_vars[VI_gen_var]^2)
+    Vs = inner_vars[V_pss_var]
+
+    #Get parameters
+    avr = PSY.get_avr(dynamic_device)
+    Ta_Tb = PSY.get_Ta_Tb(avr)
+    Tb = PSY.get_Tb(avr)
+    Ta = Tb * Ta_Tb
+    Te = PSY.get_Te(avr)
+    K = PSY.get_K(avr)
+    V_min, V_max = PSY.get_V_lim(avr)
+
+    #Compute auxiliary parameters
+    V_in = V0_ref + Vs - V_th
+    V_LL, dVr_dt = lead_lag_mass_matrix(V_in, Vr, 1.0, Ta, Tb)
+    _, dVf_dt = low_pass_nonwindup_mass_matrix(V_LL, Vf, K, Te, V_min, V_max)
+
+    #Compute 2 States AVR ODE:
+    output_ode[local_ix[1]] = dVf_dt
+    output_ode[local_ix[2]] = dVr_dt
+
+    #Update inner_vars
+    inner_vars[Vf_var] = Vf
+
+    return
+end
